@@ -1,0 +1,15 @@
+[package]
+name = "oc-display"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "OpenDisplay v3 extended monitor sender for Hyprland."
+
+[dependencies]
+anyhow = "1"
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screencast"] }
+evdev = "0.13"
+openh264 = "=0.9.3"
+pipewire = "0.10"
+serde_json.workspace = true
+tokio.workspace = true

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="referrer" content="no-referrer">
+<title>iPhone Camera</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: #f4f4f4;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+  body { display: flex; flex-direction: column; min-height: 100dvh; }
+  #stage { position: relative; flex: 1; background: #000; overflow: hidden; }
+  video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  canvas { display: none; }
+  #hud {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 16px 16px calc(18px + env(safe-area-inset-bottom));
+    background: linear-gradient(transparent, rgba(0,0,0,.75));
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  #status { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: #c8c8c8; }
+  .row { display: flex; gap: 10px; }
+  button {
+    flex: 1; border: 0; border-radius: 14px; padding: 14px 12px;
+    font-size: 16px; font-weight: 650; background: #f4f4f4; color: #111;
+  }
+  button.ghost { background: rgba(255,255,255,.14); color: #f4f4f4; }
+  button:disabled { opacity: .45; }
+  #err { color: #ff8b8b; font-size: 14px; min-height: 1.2em; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="canvas"></canvas>
+    <div id="hud">
+      <div id="status">Idle</div>
+      <div id="err"></div>
+      <div class="row">
+        <button id="start" type="button">Start back camera</button>
+      </div>
+      <div class="row">
+        <button id="flip" class="ghost" type="button">Front</button>
+      </div>
+    </div>
+  </div>
+<script>
+(() => {
+  const OUT_W = 1280;
+  const OUT_H = 720;
+  const FPS = 24;
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const statusEl = document.getElementById("status");
+  const errEl = document.getElementById("err");
+  const startBtn = document.getElementById("start");
+  const flipBtn = document.getElementById("flip");
+  canvas.width = OUT_W;
+  canvas.height = OUT_H;
+
+  let facing = "environment";
+  let wanted = false;
+  let generation = 0;
+  let session = null;
+  let transition = Promise.resolve();
+
+  const cameraName = (side) => side === "environment" ? "Back camera" : side === "user" ? "Front camera" : "Camera";
+  const current = (owner) => wanted && session === owner && owner.generation === generation && !owner.closed;
+  const setStatus = (text) => { statusEl.textContent = text; };
+  const setErr = (text) => { errEl.textContent = text || ""; };
+  const errorText = (error) => error && error.message ? error.message : String(error);
+
+  /** Refresh controls. Takes no arguments and names the current start, cancel, or stop action. */
+  function render() {
+    startBtn.textContent = wanted ? (session && session.running ? "Stop" : "Cancel") : "Start " + cameraName(facing).toLowerCase();
+    flipBtn.textContent = facing === "environment" ? "Switch to front" : "Switch to back";
+  }
+
+  /** Stop owned camera tracks. Takes a stream and releases every track. */
+  function stopTracks(stream) {
+    stream.getTracks().forEach((track) => track.stop());
+  }
+
+  /** Close one session. Takes its resources and returns after releasing an acquired wake lock. */
+  function close(owner) {
+    if (!owner || owner.closed) return owner ? owner.cleanup : Promise.resolve();
+    owner.closed = true;
+    owner.cancel();
+    clearTimeout(owner.frameTimer);
+    clearTimeout(owner.reconnectTimer);
+    if (owner.socket) {
+      const socket = owner.socket;
+      owner.socket = null;
+      try { socket.close(); } catch (_) {}
+    }
+    if (owner.stream) {
+      const stream = owner.stream;
+      owner.stream = null;
+      stopTracks(stream);
+      if (video.srcObject === stream) {
+        video.pause();
+        video.srcObject = null;
+      }
+    }
+    const lock = owner.wake;
+    owner.wake = null;
+    owner.cleanup = lock ? Promise.resolve().then(() => lock.release()) : Promise.resolve();
+    return owner.cleanup;
+  }
+
+  /** Request optional screen wake. Takes a session and releases any lock that arrives after stop. */
+  async function wake(owner) {
+    if (!navigator.wakeLock || owner.wake || owner.waking) return;
+    owner.waking = true;
+    try {
+      const lock = await navigator.wakeLock.request("screen");
+      if (!current(owner)) {
+        await lock.release();
+        return;
+      }
+      owner.wake = lock;
+      lock.addEventListener("release", () => {
+        if (owner.wake === lock) owner.wake = null;
+      });
+    } catch (_) {
+    } finally {
+      owner.waking = false;
+    }
+  }
+
+  /** Fit the video into the output frame. Takes no arguments and reports whether pixels are ready. */
+  function drawCover() {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return false;
+    const scale = Math.max(OUT_W / vw, OUT_H / vh);
+    const dw = vw * scale;
+    const dh = vh * scale;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, OUT_W, OUT_H);
+    ctx.drawImage(video, (OUT_W - dw) / 2, (OUT_H - dh) / 2, dw, dh);
+    return true;
+  }
+
+  /** Check frame delivery. Takes a session and socket; rejects stale sessions and queued network data. */
+  function canSend(owner, socket) {
+    return current(owner) && owner.socket === socket && socket.readyState === WebSocket.OPEN && socket.bufferedAmount === 0;
+  }
+
+  /** Encode and deliver a frame. Takes its session, original socket, and JPEG blob; stale work is discarded. */
+  async function sendFrame(owner, socket, blob) {
+    try {
+      if (!canSend(owner, socket)) return;
+      if (!blob) throw new Error("Could not encode a camera frame.");
+      const buffer = await blob.arrayBuffer();
+      if (!canSend(owner, socket)) return;
+      socket.send(buffer);
+      owner.sent += 1;
+      setStatus(cameraName(owner.actualFacing) + " · " + owner.sent + " frames");
+    } catch (error) {
+      if (current(owner)) setErr(errorText(error));
+    } finally {
+      owner.encoding = false;
+    }
+  }
+
+  /** Pump one active stream. Takes its session and schedules at most one 24 FPS timer. */
+  function pump(owner) {
+    if (!current(owner) || !owner.running) return;
+    owner.frameTimer = setTimeout(() => pump(owner), 1000 / FPS);
+    const socket = owner.socket;
+    if (owner.encoding || !socket || !canSend(owner, socket) || video.readyState < 2) return;
+    try {
+      if (!drawCover()) return;
+      owner.encoding = true;
+      canvas.toBlob((blob) => { void sendFrame(owner, socket, blob); }, "image/jpeg", 0.7);
+    } catch (error) {
+      owner.encoding = false;
+      if (current(owner)) setErr(errorText(error));
+    }
+  }
+
+  /** Retry a disconnected transfer. Takes a session and creates only its next reconnect timer. */
+  function reconnect(owner) {
+    if (!current(owner) || owner.reconnectTimer) return;
+    setStatus(cameraName(owner.actualFacing) + " · reconnecting");
+    owner.reconnectTimer = setTimeout(() => {
+      owner.reconnectTimer = 0;
+      connect(owner);
+    }, 800);
+  }
+
+  /** Connect one active transfer. Takes its session and ignores callbacks from replaced sockets. */
+  function connect(owner) {
+    if (!current(owner)) return;
+    let socket;
+    try {
+      socket = new WebSocket("wss://" + location.host + "/ws");
+    } catch (error) {
+      setErr(errorText(error));
+      reconnect(owner);
+      return;
+    }
+    socket.binaryType = "arraybuffer";
+    owner.socket = socket;
+    const activeSocket = () => current(owner) && owner.socket === socket;
+    socket.onopen = () => {
+      if (!activeSocket()) return;
+      setErr("");
+      setStatus(cameraName(owner.actualFacing) + " · connected");
+    };
+    socket.onclose = () => {
+      if (!activeSocket()) return;
+      owner.socket = null;
+      setErr("Connection closed. Reconnecting to the computer.");
+      reconnect(owner);
+    };
+    socket.onerror = () => {
+      if (activeSocket()) setErr("Could not reach the computer. Tailscale has to be on.");
+    };
+  }
+
+  /** Open the requested physical camera. Takes a session and returns false when superseded. */
+  async function openCamera(owner) {
+    if (!ctx) throw new Error("This browser cannot draw camera frames.");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("Camera access requires a secure page and browser permission.");
+    const sized = { width: { ideal: OUT_W }, height: { ideal: OUT_H }, frameRate: { ideal: FPS } };
+    const tries = [
+      { facingMode: { exact: owner.facing }, ...sized },
+      { facingMode: { ideal: owner.facing }, ...sized },
+      sized
+    ];
+    let last;
+    for (const constraints of tries) {
+      if (!current(owner)) return false;
+      setStatus(cameraName(owner.facing) + " · requesting access");
+      let picked;
+      try {
+        picked = await navigator.mediaDevices.getUserMedia({ audio: false, video: constraints });
+      } catch (error) {
+        if (!current(owner)) return false;
+        last = error;
+        if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) break;
+        continue;
+      }
+      if (!current(owner)) {
+        stopTracks(picked);
+        return false;
+      }
+      const track = picked.getVideoTracks()[0];
+      if (!track || /iPhone Camera/i.test(track.label || "")) {
+        stopTracks(picked);
+        last = new Error(track ? "Refusing the virtual camera. Select a physical camera." : "The selected camera has no video track.");
+        continue;
+      }
+      owner.stream = picked;
+      const settings = typeof track.getSettings === "function" ? track.getSettings() : {};
+      owner.actualFacing = settings.facingMode || (constraints.facingMode && constraints.facingMode.exact) || null;
+      if (owner.actualFacing === "environment" || owner.actualFacing === "user") facing = owner.actualFacing;
+      track.addEventListener("ended", () => {
+        if (!current(owner)) return;
+        wanted = false;
+        requestTransition();
+        setErr("The camera stopped. Start it again to reconnect.");
+      });
+      video.srcObject = picked;
+      await Promise.race([video.play(), owner.cancelled]);
+      return current(owner);
+    }
+    throw last || new Error("Camera permission denied.");
+  }
+
+  /** Reconcile the latest button request. Takes no arguments and serializes camera opens and cleanup. */
+  function requestTransition() {
+    const requested = ++generation;
+    const previous = session;
+    session = null;
+    const cleanup = close(previous).catch((error) => {
+      if (requested === generation) setErr("Could not release the screen wake lock: " + errorText(error));
+    });
+    setErr("");
+    setStatus(wanted ? cameraName(facing) + " · starting" : "Idle");
+    render();
+    transition = transition.then(async () => {
+      await cleanup;
+      if (requested !== generation || !wanted) return;
+      const owner = { generation: requested, facing, actualFacing: null, stream: null, socket: null, running: false, closed: false, frameTimer: 0, reconnectTimer: 0, encoding: false, sent: 0, wake: null, waking: false, cleanup: Promise.resolve() };
+      owner.cancelled = new Promise((resolve) => { owner.cancel = resolve; });
+      session = owner;
+      try {
+        if (!await openCamera(owner)) return;
+        if (!current(owner)) return;
+        owner.running = true;
+        setStatus(cameraName(owner.actualFacing) + " · connecting");
+        render();
+        void wake(owner);
+        connect(owner);
+        pump(owner);
+      } catch (error) {
+        if (current(owner)) {
+          wanted = false;
+          session = null;
+          setStatus("Camera stopped");
+          setErr(errorText(error));
+          render();
+        }
+      } finally {
+        if (!current(owner)) await close(owner);
+      }
+    }).catch((error) => {
+      if (requested === generation) setErr(errorText(error));
+    });
+  }
+
+  startBtn.addEventListener("click", () => {
+    wanted = !wanted;
+    requestTransition();
+  });
+  flipBtn.addEventListener("click", () => {
+    facing = facing === "environment" ? "user" : "environment";
+    if (wanted) requestTransition();
+    else { setErr(""); render(); }
+  });
+  window.addEventListener("pagehide", () => {
+    wanted = false;
+    requestTransition();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && session && session.running && current(session)) void wake(session);
+  });
+  render();
+})();
+</script>
+</body>
+</html>

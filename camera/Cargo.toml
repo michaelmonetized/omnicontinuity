@@ -1,0 +1,15 @@
+[package]
+name = "oc-camera"
+version = "0.1.0"
+edition = "2021"
+description = "iPhone camera test: Safari frames in, a V4L2 camera out."
+publish = false
+
+[[bin]]
+name = "oc-camera"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }

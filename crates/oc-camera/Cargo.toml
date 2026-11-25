@@ -1,0 +1,13 @@
+[package]
+name = "oc-camera"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "iPhone JPEG frames over Tailscale into a V4L2 camera."
+
+[dependencies]
+oc-core.workspace = true
+axum.workspace = true
+axum-server.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio.workspace = true

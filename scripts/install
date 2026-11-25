@@ -1,0 +1,24 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+project_dir=${0:A:h:h}
+install_prefix=${1:-$project_dir/var/install}
+if (( $# > 1 )); then
+  print -u2 'Usage: scripts/install [prefix]'
+  exit 2
+fi
+
+mkdir -p -- "$project_dir/var/build-tmp" "$install_prefix/bin"
+install_prefix=${install_prefix:A}
+cd "$project_dir"
+export TMPDIR="$project_dir/var/build-tmp"
+export CARGO_TARGET_DIR="$project_dir/target"
+export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-2}
+cargo build --locked --release --bin oc
+
+staged_binary="$install_prefix/bin/.oc-install-$$"
+trap 'rm -f -- "$staged_binary"' EXIT HUP INT TERM
+install -m 755 "$project_dir/target/release/oc" "$staged_binary"
+"$staged_binary" --version
+mv -f -- "$staged_binary" "$install_prefix/bin/oc"
+print -r -- "Installed $install_prefix/bin/oc"

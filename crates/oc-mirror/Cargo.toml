@@ -1,0 +1,11 @@
+[package]
+name = "oc-mirror"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "iPhone CoreDevice screen streaming over usbmuxd and existing Wi-Fi pairing."
+
+[dependencies]
+idevice = { version = "=0.1.68", default-features = false, features = ["ring", "usbmuxd", "core_device_proxy", "display_stream", "tunnel_tcp_stack", "remote_pairing"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time", "net"] }
+uuid = { version = "1", features = ["v4"] }

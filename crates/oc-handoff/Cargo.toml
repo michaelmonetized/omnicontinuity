@@ -1,0 +1,10 @@
+[package]
+name = "oc-handoff"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Explicit handoff: open a url or path on another machine."
+
+[dependencies]
+oc-core.workspace = true

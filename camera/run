@@ -1,0 +1,55 @@
+#!/bin/zsh
+# Stand up the iPhone Camera device, prove a frame comes back, then serve the phone page.
+set -euo pipefail
+
+root=${0:A:h}
+cd "$root"
+mkdir -p var/certs
+
+host=m1pro16.tail97f2f8.ts.net
+ip=100.74.233.121
+port=8443
+device=/dev/video42
+label='iPhone Camera'
+url="https://${host}:${port}/"
+
+if [[ ! -e $device ]] || ! v4l2-ctl --list-devices 2>/dev/null | grep -q "$label"; then
+  sudo -n modprobe v4l2loopback devices=1 video_nr=42 exclusive_caps=1 max_buffers=8 card_label="$label"
+  sudo -n udevadm trigger --subsystem-match=video4linux --action=change || true
+  sudo -n udevadm settle --timeout=3 || true
+fi
+
+if [[ ! -e $device ]]; then
+  echo "oc-camera: $device did not appear" >&2
+  exit 1
+fi
+
+if ! getfacl -p "$device" 2>/dev/null | grep -q '^user:michael:rw-'; then
+  sudo -n setfacl -m u:michael:rw "$device"
+fi
+
+v4l2-ctl --list-devices
+
+sudo -n tailscale cert \
+  --cert-file "$root/var/certs/cert.pem" \
+  --key-file "$root/var/certs/key.pem" \
+  --min-validity 24h \
+  "$host"
+sudo -n chown michael:michael "$root/var/certs/cert.pem" "$root/var/certs/key.pem"
+chmod 600 "$root/var/certs/key.pem"
+
+cargo build --manifest-path Cargo.toml --quiet
+
+./target/debug/oc-camera \
+  --device "$device" \
+  --ffmpeg-log var/ffmpeg.log \
+  --self-test \
+  --png var/self-test.png
+
+exec ./target/debug/oc-camera \
+  --device "$device" \
+  --ffmpeg-log var/ffmpeg.log \
+  --bind "${ip}:${port}" \
+  --cert var/certs/cert.pem \
+  --key var/certs/key.pem \
+  --public-url "$url"

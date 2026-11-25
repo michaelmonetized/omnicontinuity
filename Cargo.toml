@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/oc-cli",
+    "crates/oc-core",
+    "crates/oc-camera",
+    "crates/oc-clipboard",
+    "crates/oc-drop",
+    "crates/oc-airplay",
+    "crates/oc-display",
+    "crates/oc-mirror",
+    "crates/oc-input",
+    "crates/oc-handoff",
+    "crates/oc-mount",
+    "crates/oc-shelf",
+]
+exclude = ["camera"]
+default-members = ["crates/oc-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[workspace.dependencies]
+oc-core = { path = "crates/oc-core" }
+oc-camera = { path = "crates/oc-camera" }
+oc-clipboard = { path = "crates/oc-clipboard" }
+oc-drop = { path = "crates/oc-drop" }
+oc-airplay = { path = "crates/oc-airplay" }
+oc-display = { path = "crates/oc-display" }
+oc-mirror = { path = "crates/oc-mirror" }
+oc-input = { path = "crates/oc-input" }
+oc-handoff = { path = "crates/oc-handoff" }
+oc-mount = { path = "crates/oc-mount" }
+oc-shelf = { path = "crates/oc-shelf" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }

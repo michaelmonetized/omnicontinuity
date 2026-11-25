@@ -1,0 +1,24 @@
+[package]
+name = "oc-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Device status, continuity services, handoff, mounts, and a device shelf."
+
+[[bin]]
+name = "oc"
+path = "src/main.rs"
+
+[dependencies]
+oc-core.workspace = true
+oc-camera.workspace = true
+oc-clipboard.workspace = true
+oc-drop.workspace = true
+oc-airplay.workspace = true
+oc-display.workspace = true
+oc-mirror.workspace = true
+oc-input.workspace = true
+oc-handoff.workspace = true
+oc-mount.workspace = true
+oc-shelf.workspace = true
+tokio.workspace = true

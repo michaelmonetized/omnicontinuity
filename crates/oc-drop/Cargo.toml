@@ -1,0 +1,16 @@
+[package]
+name = "oc-drop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "AirDrop over an existing AWDL interface"
+
+[dependencies]
+flate2 = "1"
+libc = "0.2"
+openssl = "0.10"
+plist = "1"
+socket2 = { version = "0.6", features = ["all"] }
+tempfile = "3"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }

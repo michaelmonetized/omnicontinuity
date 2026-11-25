@@ -1,0 +1,10 @@
+[package]
+name = "oc-mount"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "sshfs mounts for tailnet peers."
+
+[dependencies]
+oc-core.workspace = true
